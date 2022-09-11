@@ -1,3 +1,4 @@
+﻿//--files "Files.txt" -i --verbose --style=file --debug
 //===-- clang-format/ClangFormat.cpp - Clang format tool ------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -25,7 +26,11 @@
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/Process.h"
 #include <fstream>
+#include <sstream>
+#include <filesystem>
+#include <iostream>
 
+using namespace std::filesystem;
 using namespace llvm;
 using clang::tooling::Replacements;
 
@@ -573,7 +578,7 @@ static int dumpConfig() {
   outs() << Config << "\n";
   return 0;
 }
-
+// clang-format off
 int main(int argc, const char **argv) {
   llvm::InitLLVM X(argc, argv);
 
@@ -627,7 +632,151 @@ int main(int argc, const char **argv) {
       errs() << "Formatting [" << FileNo++ << "/" << FileNames.size() << "] "
              << FileName << "\n";
     }
-    Error |= clang::format::format(FileName);
-  }
-  return Error ? 1 : 0;
+	 using namespace std;
+	 constexpr size_t Ζ = string::npos;
+	 const path otherFile{ path{FileName}.parent_path()/(string{".format."}+path{FileName}.filename().string()) };
+	 string s;
+	 {
+		 ifstream is{ FileName, ios_base::binary };
+		 if( is.fail() )
+		 {
+			 cerr << "Exception reading file:  '" << FileName << "'.  errno: " << errno;
+			 continue;
+		 }
+		 is.seekg(0, std::ios::end); s.resize( is.tellg() ); is.seekg(0);  is.read( s.data(), s.size() );
+		 if( !s.size() )
+			 continue;
+		 if( s[0]!=(char)0xef )
+			 s = string{"\xef\xbb\xbf"}+s;
+		 string adjustedContent; adjustedContent.reserve( s.size() );
+
+		 bool formatOn{}, constructor{}, macro{}, continues{};  int preprocessor{}; //string_view s{ original.data(), original.size() };
+		 auto trimmedStart = [s]( size_t i ){ for( ; i<s.size() && s[i]>0 && s[i]!='\n' && ::isspace(s[i]); ++i); return i; };
+		 auto trimmedEnd = [s]( size_t start, size_t end )
+		 {
+			 size_t j = end==s.size() ? end-1 : end;
+			 for( ; j>start && s[j]>0 && isspace(s[j]); --j );
+			 return j;
+		 };
+
+		 for (size_t next{s.empty() ? Ζ : std::min(s.size(), s.find('\n'))}, i{},iLine{1}; next<=s.size(); i = next + 1, next = next==s.size() ? Ζ : std::min(s.size(), s.find('\n', i)), ++iLine)
+		 {
+			 size_t end = trimmedEnd(i, next);
+			 string_view l{ s.data()+i, end-i+1 };
+			 if (l == "\n" )
+			 {
+				 adjustedContent += '\n';
+				 continue;
+			 }
+			 size_t start = trimmedStart(i);
+			 string_view trimmed{ s.data()+start, end-start+1 };
+
+			 char back = l.size() ? l.back() : 0;
+			 //if( back=='\r' )
+			 //{
+				// l = { original.data()+i, next-i-1 };
+				// back = l.size() ? l.back() : 0;
+			 //}
+
+			 if( size_t b=25; iLine==b )
+				 iLine = b;
+			 auto includes = [l]( auto v ){ return l.find(v)!=Ζ; };
+			 auto ends_with = [l]( string_view v ){ return l.find(v)==l.size()-v.size(); };
+			 auto starts_with = [trimmed]( string_view v ){ return trimmed.find(v)==0; };
+			 if( includes("// clang-format off") )
+				 formatOn = true;
+			 else if( includes("// clang-format on") )
+				 formatOn = false;
+			 if( includes( "#if" ) )
+				 ++preprocessor;
+			 bool cancelConstructor{};
+			 if( !constructor )
+				constructor = back==':' && !includes("public") && !includes("protected") && !includes("private");
+			 else
+			 {
+				 size_t i2{};
+				 for( ;i2<l.size() && l[i2]>0 && isspace(l[i2]); ++i2 );
+				 cancelConstructor = i2 == l.size() || l[i2] == '{';
+			 }
+			 macro = includes("#define") || continues;
+			 const bool custom = constructor || preprocessor
+				 || ends_with("> =0;") //abstract returning template variable
+				 || starts_with( "//" )
+				 || starts_with( "?" )
+				 || starts_with( ":" )
+				 || count(l.begin(), l.end(), ';')>1
+				 || macro
+				 || includes( "; }" )
+				 || ( includes( "if(" ) && ends_with(";") )
+				 || includes( "<<" )// enum bitfields are aligned.
+				 || ( includes('{') && includes('}')
+					 && (includes("enum") || includes("namespace") || includes("find_if")) );
+			 if( custom && !formatOn )
+			 {
+				 adjustedContent += "//§\n// clang-format off\n";
+				 formatOn = true;
+			 }
+			 else if( !custom && formatOn )
+			 {
+				 adjustedContent += "//§\n// clang-format on\n";
+				 formatOn = false;
+			 }
+			 adjustedContent += l; adjustedContent += '\n';
+			 if( includes( "#endif" ) )
+			 {
+				 assert( preprocessor );
+				 --preprocessor;
+			 }
+			 else if( cancelConstructor )
+				 constructor = false;
+			 continues = back=='\\';
+		 }
+		 while( adjustedContent.size() && adjustedContent.back()=='\n' )
+			 adjustedContent = adjustedContent.substr( 0, adjustedContent.size()-1 );
+
+		 std::ofstream f{ otherFile, ios_base::binary }; f.write( adjustedContent.data(), adjustedContent.size() );
+	 }
+    Error |= clang::format::format( otherFile.string() );
+	 if( Error )
+		 continue;
+
+	 string newFile;
+	 {
+		 newFile.reserve( s.size()*1.1 );
+		 ifstream is{ otherFile, ios_base::binary };
+		 for( string l; getline(is,l); )
+		 {
+			 char ch = l.size() ? l[l.size() - 1] : 0;
+			 if( ch=='\r' )
+			 {
+				 l.resize( l.size()-1 );
+				 ch = l.size() ? l[l.size() - 1] : 0;
+			 }
+			 if( ch== '§' )
+			 {
+				 getline(is,l);
+				 continue;
+			 }
+			 newFile += l; newFile += '\n';
+		 }
+		 while( newFile.size() && newFile[newFile.size()-1]>0 && ::isspace(newFile[newFile.size()-1]) )
+			 newFile.resize( newFile.size()-1 );
+		}
+		{
+			size_t i=0;
+			for( ; i<max(s.size(), newFile.size()) && newFile[i]==s[i]; ++i );
+			if( i<newFile.size() )
+			{
+				fstream f( FileName, ios_base::in | ios_base::out | ios_base::ate | ios_base::binary );
+				if( f.fail() )
+					cerr << "Exception opening/reading/closing file:  " << errno; //strerror(errno);
+				f.seekp( i, ios_base::beg );
+				f.write( newFile.data()+i, newFile.size()-i );
+			}
+			if( newFile.size()/*5411*/<s.size()/*5353*/ )
+				resize_file( FileName, newFile.size() );
+			remove( otherFile );
+		}
+	}
+	return Error ? 1 : 0;
 }

@@ -1,4 +1,4 @@
-//===--- TokenAnnotator.cpp - Format C++ code -----------------------------===//
+﻿//===--- TokenAnnotator.cpp - Format C++ code -----------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -18,6 +18,7 @@
 #include "clang/Basic/TokenKinds.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/Debug.h"
+#include <optional>
 
 #define DEBUG_TYPE "format-token-annotator"
 
@@ -2702,7 +2703,7 @@ void TokenAnnotator::annotate(AnnotatedLine &Line) const {
   else if (Line.startsWith(TT_ObjCProperty))
     Line.Type = LT_ObjCProperty;
 
-  Line.First->SpacesRequiredBefore = 1;
+  Line.First->SpacesRequiredBefore = Line.First->is(tok::l_brace) ? 0 : 1;
   Line.First->CanBreakBefore = Line.First->MustBreakBefore;
 }
 
@@ -3241,6 +3242,17 @@ unsigned TokenAnnotator::splitPenalty(const AnnotatedLine &Line,
   return 3;
 }
 
+static bool MyIsFunctionArgument(const FormatToken &Tok) {
+  std::optional<bool> pResult;
+  for (const auto *p=Tok.Previous; p && !pResult; p = p->Previous) {
+    if (p->is(tok::l_paren))
+      pResult = true;
+    else if (p->is(tok::semi))
+      pResult = false;
+  }
+  return pResult.value_or(false);
+}
+
 bool TokenAnnotator::spaceRequiredBeforeParens(const FormatToken &Right) const {
   if (Style.SpaceBeforeParens == FormatStyle::SBPO_Always)
     return true;
@@ -3258,6 +3270,10 @@ bool TokenAnnotator::spaceRequiredBeforeParens(const FormatToken &Right) const {
 bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
                                           const FormatToken &Left,
                                           const FormatToken &Right) const {
+  if (Left.TokenText == ")" && Right.getType() == TT_TrailingAnnotation ) //(Right.TokenText == "noexcept" || Right.TokenText == "ι"))
+      return false;
+  if( Right.TokenText == ">=" )
+	  return false;
   if (Left.is(tok::kw_return) &&
       !Right.isOneOf(tok::semi, tok::r_paren, tok::hashhash)) {
     return true;
@@ -3305,12 +3321,82 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
       !Right.isOneOf(tok::semi, tok::r_paren)) {
     return true;
   }
+  std::optional<bool> pResult;
+  if ( (Left.is(tok::l_paren) || Right.is(tok::r_paren))
+	  || (Left.is(tok::l_brace) && Left.MatchingParen && Left.MatchingParen->is(BK_BracedInit))
+	  || (Right.is(tok::r_brace) && Right.MatchingParen && Right.MatchingParen->is(BK_BracedInit)) )
+  {
+    //return (Right.is(TT_CastRParen) ||
+    //        (Left.MatchingParen && Left.MatchingParen->is(TT_CastRParen)))
+    //           ? Style.SpacesInCStyleCastParentheses
+    //           : Style.SpacesInParentheses;
+	  if( Right.is(TT_CastRParen) || (Left.MatchingParen && Left.MatchingParen->is(TT_CastRParen)) )
+		  return Style.SpacesInCStyleCastParentheses;
+	  else
+	  {
+		  std::string debug = Line._line.ToString();
+		  if( Left.TokenText == ")" && Right.TokenText == ")" )
+			  pResult = std::nullopt;
 
-  if (Left.is(tok::l_paren) || Right.is(tok::r_paren)) {
-    return (Right.is(TT_CastRParen) ||
-            (Left.MatchingParen && Left.MatchingParen->is(TT_CastRParen)))
-               ? Style.SpacesInCStyleCastParentheses
-               : Style.SpacesInParentheses;
+		  bool spaces = Style.SpacesInParentheses;
+		  if( !spaces )
+				return false;
+
+			if( Left.is(tok::l_paren) || Left.is(tok::l_brace) )
+			{
+				if( Left.Previous && Left.Previous->TokenText=="noexcept" )
+					spaces = false;
+				size_t additional=0;
+				for( auto pTok = Left.Previous; pTok && spaces; pTok = pTok->Previous )
+				{
+					if( pTok->is(tok::r_paren) )
+						++additional;
+					else if( pTok->is(tok::l_paren) )
+					{
+						if( additional==0 )
+							spaces = false;
+						else
+							--additional;
+					}
+				}
+			}
+			else if( Left.is(tok::r_paren) && Right.is(tok::r_paren) )
+				spaces = true;
+			else //right=closed something.
+			{
+				/*if( auto pFalse = Right.Previous; pFalse && pFalse->TokenText=="false" )
+				{
+					if( auto pLeft = pFalse->Previous; pLeft && pLeft->is(tok::l_paren) )
+					{
+						if( auto pNoExcept = pLeft->Previous )
+							spaces = pNoExcept->TokenText!="noexcept";
+					}
+				}*/
+				auto increment = []( tok::TokenKind type, const FormatToken& t, int& count )
+				{
+					if( t.is(type) )
+						++count;
+					else if( t.is((tok::TokenKind)((int)type+1)) )
+						--count;
+				};
+				int brace{}, paren{ Left.is(tok::r_paren) || Right.is(tok::r_paren) ? -1 : 0 };
+				for( auto p = Left.Previous; p; p = p->Previous )
+				{
+					increment( tok::l_paren, *p, paren );
+					increment( tok::l_brace, *p, brace );
+				}
+				spaces = !Right.is(tok::r_brace) || paren==0;//want { x( ... ) }, but also ( x{...} )
+				if( spaces && Right.is(tok::r_paren) && paren>0 ) //LTrim( X s, function<bool(char)> f )
+					spaces = false;
+				for( auto p = Right.Next; p && spaces; p = p->Next )
+				{
+					increment( tok::l_paren, *p, paren );
+					increment( tok::l_brace, *p, brace );
+					spaces = paren>=0 && brace>=0;
+				}
+			}
+		  return spaces;
+	  }
   }
   if (Right.isOneOf(tok::semi, tok::comma))
     return false;
@@ -3682,6 +3768,19 @@ bool TokenAnnotator::spaceRequiredBetween(const AnnotatedLine &Line,
 bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
                                          const FormatToken &Right) const {
   const FormatToken &Left = *Right.Previous;
+  std::optional<bool> pResult;
+  if (Right.TokenText == ")")
+	  pResult = std::nullopt;
+  if (Left.TokenText == "char" && Right.TokenText == ")")
+	  pResult = std::nullopt;
+  if( Right.is(tok::l_brace) )
+	  if( Right.Next && Right.Next->TokenText=="string" )
+	  pResult = std::nullopt;
+  //if( (Right.is(TT_BinaryOperator) && Left.TokenText!="include") || Left.is(TT_BinaryOperator) )
+//    pResult = false;
+
+  if( pResult )
+    return *pResult;
 
   // If the token is finalized don't touch it (as it could be in a
   // clang-format-off section).
@@ -3992,7 +4091,7 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
 
   if (Right.isOneOf(TT_TrailingReturnArrow, TT_LambdaArrow) ||
       Left.isOneOf(TT_TrailingReturnArrow, TT_LambdaArrow)) {
-    return true;
+    return false;
   }
   if (Left.is(tok::comma) && !Right.is(TT_OverloadedOperatorLParen))
     return true;
@@ -4090,6 +4189,12 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
       (Right.is(tok::period) && Right.isNot(TT_DesignatedInitializerPeriod))) {
     return false;
   }
+  if (Right.getPrecedence() == prec::Assignment && MyIsFunctionArgument(Left))
+    return false;
+  else if (Left.getPrecedence() == prec::Assignment &&
+           MyIsFunctionArgument(Left))
+    return false;
+
   if (!Style.SpaceBeforeAssignmentOperators && Left.isNot(TT_TemplateCloser) &&
       Right.getPrecedence() == prec::Assignment) {
     return false;
@@ -4127,9 +4232,12 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
       Right.isOneOf(tok::amp, tok::ampamp)) {
     return getTokenReferenceAlignment(Right) != FormatStyle::PAS_Left;
   }
-  if ((Right.is(TT_BinaryOperator) && !Left.is(tok::l_paren)) ||
-      (Left.isOneOf(TT_BinaryOperator, TT_ConditionalExpr) &&
-       !Right.is(tok::r_paren))) {
+	if( Right.is(TT_BinaryOperator) && !Left.is(tok::l_paren) )
+	{
+		if( Right.TokenText!="<" || !Right.NextOperator || Right.NextOperator->TokenText!=">=" ) //sp<string> =0
+			return true;
+	}
+	else if( Left.isOneOf(TT_BinaryOperator, TT_ConditionalExpr) && !Right.is(tok::r_paren) && (!Left.NextOperator || Left.NextOperator->TokenText!=">=") ) {
     return true;
   }
   if (Right.is(TT_TemplateOpener) && Left.is(tok::r_paren) &&

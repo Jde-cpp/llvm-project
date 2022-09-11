@@ -380,10 +380,8 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
     return true;
   }
   if (CurrentState.IsChainedConditional &&
-      ((Style.BreakBeforeTernaryOperators && Current.is(TT_ConditionalExpr) &&
-        Current.is(tok::colon)) ||
-       (!Style.BreakBeforeTernaryOperators && Previous.is(TT_ConditionalExpr) &&
-        Previous.is(tok::colon)))) {
+      Style.BreakBeforeTernaryOperators && Current.is(TT_ConditionalExpr) && Current.is(tok::colon) ){
+		//|| (!Style.BreakBeforeTernaryOperators && Previous.is(TT_ConditionalExpr) && Previous.is(tok::colon)))
     return true;
   }
   if (((Previous.is(TT_DictLiteral) && Previous.is(tok::l_brace)) ||

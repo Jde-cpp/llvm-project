@@ -3489,7 +3489,8 @@ static FormatStyle::LanguageKind getLanguageByFileName(StringRef FileName) {
 
 FormatStyle::LanguageKind guessLanguage(StringRef FileName, StringRef Code) {
   const auto GuessedLanguage = getLanguageByFileName(FileName);
-  if (GuessedLanguage == FormatStyle::LK_Cpp) {
+  if constexpr( false )//(GuessedLanguage == FormatStyle::LK_Cpp)
+  {
     auto Extension = llvm::sys::path::extension(FileName);
     // If there's no file extension (or it's .h), we need to check the contents
     // of the code to see if it contains Objective-C.
