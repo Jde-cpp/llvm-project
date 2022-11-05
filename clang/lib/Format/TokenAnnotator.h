@@ -35,6 +35,8 @@ enum LineType {
 
 class AnnotatedLine {
 public:
+	std::string _value;
+	UnwrappedLine _line;
   AnnotatedLine(const UnwrappedLine &Line)
       : First(Line.Tokens.front().Tok), Level(Line.Level),
         MatchingOpeningBlockLineIndex(Line.MatchingOpeningBlockLineIndex),
@@ -43,7 +45,10 @@ public:
         MustBeDeclaration(Line.MustBeDeclaration), MightBeFunctionDecl(false),
         IsMultiVariableDeclStmt(false), Affected(false),
         LeadingEmptyLinesAffected(false), ChildrenAffected(false),
-        FirstStartColumn(Line.FirstStartColumn) {
+        FirstStartColumn(Line.FirstStartColumn),
+		  _value{ Line.ToString() },
+		  _line{Line}
+  {
     assert(!Line.Tokens.empty());
 
     // Calculate Next and Previous for all tokens. Note that we must overwrite
